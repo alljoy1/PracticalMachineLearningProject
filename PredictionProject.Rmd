@@ -1,0 +1,141 @@
+---
+title: "Practical Machine Learning Project"
+author: "Alljoy_j"
+date: "Sunday, March 22, 2015"
+output: html_document
+---
+##Synopsis
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively.  One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, the goal is to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset). 
+
+The goal of the project is to predict the manner in which they did the exercise -- either correctly, or which of the 5 incorrect ways was used.
+
+##Data Processing
+###Loading and preprocessing the data
+
+The training data for this project are available here: 
+  https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+The test data are available here: 
+  https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+The data for this project come from this source: http://groupware.les.inf.puc-rio.br/har. If you use the document you create for this class for any purpose please cite them as they have been very generous in allowing their data to be used for this kind of assignment. 
+
+The data is loaded into the working directory using the below code.  Note that several libraries must be installed prior to running this document, so a function is used to install packages if they haven't already been installed (I didn't write it, it came from stack overflow). Also, the seed set must be used to obtain the same results.  When the document is loaded, the number of observations and the number of variables will display:
+
+```{r, cache=TRUE, warning=FALSE,message=FALSE}
+# setwd("C:/Data/Coursera/8 PracticalMachineLearning/Week3/")
+
+ ##  Package to check for required package, install it if missing, and load it    
+  packageload<-function(x){
+    x<-as.character(match.call()[[2]])
+    if (!require(x,character.only=TRUE)){
+      install.packages(pkgs=x,repos="http://cran.r-project.org")
+      require(x,character.only=TRUE)
+    }
+  }
+  
+packageload(AppliedPredictiveModeling)
+packageload(caret)
+packageload(data.table)
+packageload(data.table)
+packageload(plyr)
+packageload(gmb)
+packageload(randomForest)
+packageload(ggplot2)
+
+set.seed(3433) #this number was used in one of our assignments, it worked, didn't change it
+trnUrl <- "http://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+#reads the dataset from the website and finds the number of rows & columns
+trn_ds <- read.csv(url(trnUrl), na.strings=c("NA","#DIV/0!",""))
+# count of observations
+print (NROW(trn_ds))
+# count of variables
+print (NCOL(trn_ds))
+ds_names<- names(trn_ds)
+
+```
+
+
+After the data is read, an initial view of the data showed several records with NA's in the variable.  When these were examined, they were found to be aggregate columns.  To prevent issues with collinarity, These will not be used in the analysis as the underlying data they are based off of will be included instead.
+
+Only those fields of interest are subseted into a data frame (named ds_names2), and that frame is divided into two sets (First_trn_ds and Second_trn_ds).  When completed, the number of observations and number of variables for the first data set (the 60% data set) and the number of observations and number of variables for the second data set (the 40% data set) display, using the below code:
+
+```{r, echo=TRUE}
+#removes aggregated columns
+#removes aggregated columns
+ds_names2<-names(which(colSums(is.na(trn_ds))==0)) #doesn't account for blanks, only NA's
+trn_ds2<-subset(trn_ds, select = ds_names2)
+setnames(trn_ds2,ds_names2)
+#removes near zero covariets
+near_zero <- nearZeroVar(trn_ds2, saveMetrics = TRUE)
+trn_ds2<-trn_ds2[,!near_zero$nzv]
+ds_names2<-names(trn_ds2)
+rem_colct<-NCOL(trn_ds2)  #remaining columns
+#remove first column (row count)
+trn_ds2<-as.data.table(subset(trn_ds2, select =ds_names2[2:rem_colct]))
+rem_colct<-rem_colct - 1  #removed first column
+trn_ds2<-as.data.table(trn_ds2)
+
+#partitions the data into 2 sets (60/40 split)
+trn_ds2 <- trn_ds2[, classe := factor(trn_ds2[, classe])]
+trn_ds2[, .N, classe]
+
+trn_part <- createDataPartition(y=trn_ds2$classe, p=0.6, list=FALSE)
+First_trn_ds<-as.data.frame(trn_ds2)[trn_part,]
+Second_trn_ds <- as.data.frame(trn_ds2)[-trn_part,]
+names(First_trn_ds)=names(trn_ds2)
+names(Second_trn_ds)=names(trn_ds2)
+
+# displays # of observations and # of variables for first set (60% set)
+dim(First_trn_ds)
+# displays # of observations and # of variables for second set (40% set)
+dim(Second_trn_ds)
+```
+
+##Model Selection and Building the Model
+
+Once the data has been cleaned and subsetted, two different models were applied and a comparison made between the two.  The first model applied was a random forrest model,   Below is the code used in generating the model and the output of the model statistics:
+
+```{r, cache=TRUE}
+
+# fit model using random forest
+modfit <- train(classe ~ ., method = "rf", data = First_trn_ds , importance = TRUE, trControl = trainControl(method = "cv", number = 10))
+print(modfit)
+```
+The model was then run against the second data set and its accuracy was checked using the confusionMatrix function.
+
+```{r}
+
+predict1 <- predict(modfit, Second_trn_ds, type = "raw")
+confusionMatrix(predict1, Second_trn_ds$classe)
+
+```
+
+##
+The second model generated was a boosted tree model using the gbm package.  Its accuracy was also checked using the confusionMatrix function.  below is the code and the output:
+
+```{r, cache = TRUE}
+
+# this code bit was retrieved from http://topepo.github.io/caret/training.html
+# just sets control feture of the gbm method into a variable
+fitControl <- trainControl(## 10-fold CV
+  method = "repeatedcv",
+  number = 10,
+  ## repeated ten times
+  repeats = 0)
+
+#fit a boosted tree model via the gbm package.
+gbmFit1 <- train(classe ~ ., data = First_trn_ds,
+                 method = "gbm",
+                 trControl = fitControl,
+                 verbose = FALSE)
+print(gbmFit1)
+```
+and checking the model against the test set:
+```{r,cahce=TRUE}
+predict2 <- predict(gbmFit1, Second_trn_ds, type = "raw")
+confusionMatrix(predict2, Second_trn_ds$classe)
+```
+##Conclusion
+By the model output summaries and the confusion matrices on the test set, the random forest model yielded marginally better results than the boosted tree model, however the differences are so small they could be a result of random occurance.  Both the forest model and the boosted tree model yielded acceptable results.  
+
